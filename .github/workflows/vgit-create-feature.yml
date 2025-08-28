@@ -210,24 +210,36 @@ jobs:
             echo "PREVIEW_BUILD_SUCCESS=false" >> $GITHUB_ENV
           fi
 
-      - name: Deploy to Netlify (if build succeeded)
-        if: env.PREVIEW_BUILD_SUCCESS == 'true'
-        uses: netlify/actions/cli@master
-        with:
-          args: deploy --dir=dist --alias="${{ github.event.inputs.branch_name }}" --json
-        env:
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-
-      - name: Extract Netlify deployment URL
+      - name: Install Netlify CLI
         if: env.PREVIEW_BUILD_SUCCESS == 'true'
         run: |
-          # Extract preview URL from Netlify action output
-          if [ -n "$NETLIFY_URL" ]; then
-            echo "✅ Preview deployed: $NETLIFY_URL"
-            echo "PREVIEW_URL=$NETLIFY_URL" >> $GITHUB_ENV
+          echo "🌐 Installing Netlify CLI..."
+          npm install -g netlify-cli
+          netlify --version
+
+      - name: Deploy to Netlify (if build succeeded)
+        if: env.PREVIEW_BUILD_SUCCESS == 'true'
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          if [ -n "$NETLIFY_AUTH_TOKEN" ] && [ -n "$NETLIFY_SITE_ID" ]; then
+            echo "🚀 Deploying to Netlify..."
+            
+            # Deploy to Netlify with branch alias
+            DEPLOY_OUTPUT=$(netlify deploy --dir=dist --alias="${{ github.event.inputs.branch_name }}" --json) || {
+              echo "⚠️ Netlify deployment failed, continuing..."
+              exit 0
+            }
+            
+            # Extract preview URL
+            PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | jq -r '.deploy_url // empty')
+            if [ -n "$PREVIEW_URL" ]; then
+              echo "✅ Preview deployed: $PREVIEW_URL"
+              echo "PREVIEW_URL=$PREVIEW_URL" >> $GITHUB_ENV
+            fi
           else
-            echo "⚠️ No deployment URL received from Netlify"
+            echo "ℹ️ Netlify credentials not configured, skipping deployment"
           fi
 
       - name: Update commit with preview info
