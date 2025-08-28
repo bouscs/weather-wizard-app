@@ -214,7 +214,7 @@ jobs:
         if: env.PREVIEW_BUILD_SUCCESS == 'true'
         uses: netlify/actions/cli@master
         with:
-          args: deploy --dir=dist --alias="${{ github.event.inputs.branch_name }}" --json
+          args: deploy --dir=dist --no-build --alias="${{ github.event.inputs.branch_name }}" --json
         env:
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
