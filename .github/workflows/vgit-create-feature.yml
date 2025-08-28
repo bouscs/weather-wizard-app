@@ -211,6 +211,7 @@ jobs:
           fi
 
       - name: Deploy to Netlify (if build succeeded)
+        id: netlify-deploy
         if: env.PREVIEW_BUILD_SUCCESS == 'true'
         uses: netlify/actions/cli@master
         with:
@@ -223,11 +224,23 @@ jobs:
         if: env.PREVIEW_BUILD_SUCCESS == 'true'
         run: |
           # Extract preview URL from Netlify action output
-          if [ -n "$NETLIFY_URL" ]; then
-            echo "✅ Preview deployed: $NETLIFY_URL"
-            echo "PREVIEW_URL=$NETLIFY_URL" >> $GITHUB_ENV
+          DEPLOY_URL="${{ steps.netlify-deploy.outputs.NETLIFY_URL }}"
+          
+          # If the action output is empty, try parsing the raw output
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "⚠️ No URL from action outputs, checking for alternative sources..."
+            # The Netlify action should set NETLIFY_URL but sometimes it doesn't work reliably
+            DEPLOY_URL="$NETLIFY_URL"
+          fi
+          
+          if [ -n "$DEPLOY_URL" ]; then
+            echo "✅ Preview deployed: $DEPLOY_URL"
+            echo "PREVIEW_URL=$DEPLOY_URL" >> $GITHUB_ENV
           else
             echo "⚠️ No deployment URL received from Netlify"
+            echo "Action outputs available:"
+            echo "NETLIFY_URL: ${{ steps.netlify-deploy.outputs.NETLIFY_URL }}"
+            echo "Environment NETLIFY_URL: $NETLIFY_URL"
           fi
 
       - name: Update commit with preview info
