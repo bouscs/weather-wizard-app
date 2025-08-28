@@ -32,6 +32,10 @@ jobs:
   create-feature:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write        # For git operations (checkout, commit, push)
+      id-token: write       # For Claude Code action OIDC authentication
+      actions: read         # For workflow operations
     
     steps:
       - name: Validate inputs
@@ -87,65 +91,21 @@ jobs:
             echo "⚠️ No package.json found, skipping dependency installation"
           fi
 
-      - name: Install Claude CLI
-        run: |
-          echo "🤖 Installing Claude CLI..."
-          npm install -g @anthropic-ai/claude-cli
-          claude --version
-
-      - name: Setup Claude CLI permissions
-        run: |
-          echo "🔧 Setting up Claude CLI permissions..."
-          mkdir -p .claude
-          cat > .claude/settings.json << 'EOF'
-          {
-            "permissions": {
-              "allow": [
-                "Bash(git:*)",
-                "Bash(npm:*)",
-                "Bash(node:*)",
-                "Read(*)",
-                "Edit(*)",
-                "Write(*)",
-                "Glob(*)",
-                "Grep(*)"
-              ]
-            }
-          }
-          EOF
-          echo "✅ Claude CLI permissions configured"
-
-      - name: Implement feature with Claude CLI
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          echo "🚀 Implementing feature with Claude CLI..."
-          echo "Feature request: ${{ github.event.inputs.request }}"
-          
-          # Create comprehensive prompt for Claude
-          PROMPT="Implement the following feature request: ${{ github.event.inputs.request }}
-
-          You are working on a project in the current directory. Please:
-          1. Analyze the existing codebase structure and patterns
-          2. Implement the requested feature following the existing patterns
-          3. Make sure all files are properly formatted and linted
-          4. Create or update any necessary tests
-          5. Update documentation if needed
-          
-          Focus on creating production-ready code that integrates well with the existing codebase."
-          
-          # Execute Claude CLI with proper error handling
-          claude "$PROMPT" --output-format json > claude_output.json || {
-            echo "❌ Claude CLI execution failed"
-            cat claude_output.json 2>/dev/null || echo "No output file generated"
-            exit 1
-          }
-          
-          echo "✅ Claude CLI execution completed"
-          
-          # Log output for debugging (truncated)
-          echo "📄 Claude output (first 1000 chars):"
-          head -c 1000 claude_output.json || echo "Could not read output"
+      - name: Implement feature with Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Implement the following feature request: ${{ github.event.inputs.request }}
+            
+            You are working on a project in the current directory. Please:
+            1. Analyze the existing codebase structure and patterns
+            2. Implement the requested feature following the existing patterns
+            3. Make sure all files are properly formatted and linted
+            4. Create or update any necessary tests
+            5. Update documentation if needed
+            
+            Focus on creating production-ready code that integrates well with the existing codebase.
 
       - name: Verify changes
         run: |
