@@ -1,15 +1,19 @@
-name: VGit Create Feature
+name: VGit Deploy Preview
 on:
   workflow_dispatch:
     inputs:
       branch_name:
-        description: 'Name for the new branch'
+        description: 'Branch to deploy'
         required: true
         type: string
-      request:
-        description: 'Feature request description'
-        required: true
-        type: string
+      deployment_type:
+        description: 'Type of deployment'
+        required: false
+        type: choice
+        default: 'preview'
+        options:
+          - 'preview'
+          - 'production'
       username:
         description: 'GitHub username'
         required: true
@@ -18,24 +22,16 @@ on:
         description: 'Project name'
         required: true
         type: string
-      current_node:
-        description: 'Current workspace node (optional)'
+      force_rebuild:
+        description: 'Force rebuild even if no changes'
         required: false
-        type: string
-      base_branch:
-        description: 'Base branch to create feature from'
-        required: false
-        type: string
-        default: 'main'
+        type: boolean
+        default: false
 
 jobs:
-  create-feature:
+  deploy-preview:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: write        # For git operations (checkout, commit, push)
-      id-token: write       # For Claude Code action OIDC authentication
-      actions: read         # For workflow operations
     
     steps:
       - name: Validate inputs
@@ -44,249 +40,305 @@ jobs:
             echo "❌ Branch name is required"
             exit 1
           fi
-          if [ -z "${{ github.event.inputs.request }}" ]; then
-            echo "❌ Feature request is required"
-            exit 1
-          fi
           echo "✅ Inputs validated"
           echo "Branch: ${{ github.event.inputs.branch_name }}"
-          echo "Request: ${{ github.event.inputs.request }}"
+          echo "Type: ${{ github.event.inputs.deployment_type }}"
 
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.branch_name }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Git
+      - name: Verify branch exists
         run: |
-          git config --global user.name "${{ github.event.inputs.username }}"
-          git config --global user.email "${{ github.event.inputs.username }}@users.noreply.github.com"
+          echo "🔍 Verifying branch exists..."
+          CURRENT_BRANCH=$(git branch --show-current)
+          if [ "$CURRENT_BRANCH" != "${{ github.event.inputs.branch_name }}" ]; then
+            echo "❌ Failed to checkout branch '${{ github.event.inputs.branch_name }}'"
+            echo "Current branch: $CURRENT_BRANCH"
+            exit 1
+          fi
+          echo "✅ Successfully checked out branch: ${{ github.event.inputs.branch_name }}"
 
-      - name: Create feature branch
+      - name: Detect project type and build configuration
         run: |
-          echo "🌿 Creating feature branch: ${{ github.event.inputs.branch_name }}"
+          echo "🔍 Detecting project type..."
           
-          # Ensure we're on the base branch
-          git checkout ${{ github.event.inputs.base_branch }}
-          git pull origin ${{ github.event.inputs.base_branch }}
-          
-          # Create and switch to feature branch
-          git checkout -b "${{ github.event.inputs.branch_name }}"
-          
-          echo "✅ Feature branch created successfully"
+          if [ -f "package.json" ]; then
+            echo "📦 Node.js project detected"
+            echo "PROJECT_TYPE=nodejs" >> $GITHUB_ENV
+            
+            # Check for build script
+            if grep -q '"build"' package.json; then
+              BUILD_SCRIPT=$(jq -r '.scripts.build' package.json)
+              echo "BUILD_SCRIPT=$BUILD_SCRIPT" >> $GITHUB_ENV
+              echo "HAS_BUILD_SCRIPT=true" >> $GITHUB_ENV
+              echo "✅ Build script found: $BUILD_SCRIPT"
+            else
+              echo "⚠️ No build script found in package.json"
+              echo "HAS_BUILD_SCRIPT=false" >> $GITHUB_ENV
+            fi
+            
+            # Check for dev script
+            if grep -q '"dev"' package.json; then
+              DEV_SCRIPT=$(jq -r '.scripts.dev' package.json)
+              echo "DEV_SCRIPT=$DEV_SCRIPT" >> $GITHUB_ENV
+              echo "HAS_DEV_SCRIPT=true" >> $GITHUB_ENV
+              echo "✅ Dev script found: $DEV_SCRIPT"
+            fi
+            
+            # Detect framework
+            if jq -e '.dependencies.react' package.json > /dev/null 2>&1; then
+              echo "FRAMEWORK=react" >> $GITHUB_ENV
+              echo "⚛️ React project detected"
+            elif jq -e '.dependencies.vue' package.json > /dev/null 2>&1; then
+              echo "FRAMEWORK=vue" >> $GITHUB_ENV
+              echo "🟢 Vue project detected"
+            elif jq -e '.dependencies.next' package.json > /dev/null 2>&1; then
+              echo "FRAMEWORK=nextjs" >> $GITHUB_ENV
+              echo "🔼 Next.js project detected"
+            elif jq -e '.dependencies.angular' package.json > /dev/null 2>&1; then
+              echo "FRAMEWORK=angular" >> $GITHUB_ENV
+              echo "🅰️ Angular project detected"
+            else
+              echo "FRAMEWORK=vanilla" >> $GITHUB_ENV
+              echo "🌐 Vanilla JavaScript project detected"
+            fi
+            
+          elif [ -f "index.html" ]; then
+            echo "🌐 Static HTML project detected"
+            echo "PROJECT_TYPE=static" >> $GITHUB_ENV
+            echo "HAS_BUILD_SCRIPT=false" >> $GITHUB_ENV
+            
+          else
+            echo "❓ Unknown project type"
+            echo "PROJECT_TYPE=unknown" >> $GITHUB_ENV
+            echo "HAS_BUILD_SCRIPT=false" >> $GITHUB_ENV
+          fi
 
-      - name: Setup Node.js
+      - name: Setup Node.js (if needed)
+        if: env.PROJECT_TYPE == 'nodejs'
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
+        if: env.PROJECT_TYPE == 'nodejs'
         run: |
-          if [ -f "package.json" ]; then
-            echo "📦 Installing dependencies..."
-            npm install
-          else
-            echo "⚠️ No package.json found, skipping dependency installation"
-          fi
+          echo "📦 Installing dependencies..."
+          npm install
 
-      - name: Implement feature with Claude Code
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: |
-            Implement the following feature request: ${{ github.event.inputs.request }}
-            
-            You are working on a project in the current directory. Please:
-            1. Analyze the existing codebase structure and patterns
-            2. Implement the requested feature following the existing patterns
-            3. Make sure all files are properly formatted and linted
-            4. Create or update any necessary tests
-            5. Update documentation if needed
-            
-            Focus on creating production-ready code that integrates well with the existing codebase.
-
-      - name: Verify changes
+      - name: Run pre-build checks
+        if: env.PROJECT_TYPE == 'nodejs'
         run: |
-          echo "🔍 Verifying implemented changes..."
+          echo "🔧 Running pre-build checks..."
           
-          # Check if any files were modified
-          if git diff --quiet; then
-            echo "⚠️ No changes detected. Creating a minimal change to complete the workflow."
-            echo "# Feature: ${{ github.event.inputs.request }}" >> FEATURE_LOG.md
-            echo "- Implemented on: $(date)" >> FEATURE_LOG.md
-            echo "- Branch: ${{ github.event.inputs.branch_name }}" >> FEATURE_LOG.md
-            echo "" >> FEATURE_LOG.md
-          else
-            echo "✅ Changes detected:"
-            git diff --name-only
-          fi
-
-      - name: Run tests (if available)
-        run: |
-          echo "🧪 Running tests..."
-          if [ -f "package.json" ] && grep -q '"test"' package.json; then
-            npm test || {
-              echo "⚠️ Tests failed, but continuing with feature implementation"
-              echo "TEST_FAILURES=true" >> $GITHUB_ENV
+          # Run linting if available
+          if npm run lint --silent > /dev/null 2>&1; then
+            echo "🔍 Running linter..."
+            npm run lint || {
+              echo "⚠️ Linting issues found (continuing with deployment)"
+              echo "LINT_ISSUES=true" >> $GITHUB_ENV
             }
-          else
-            echo "ℹ️ No test script found, skipping tests"
+          fi
+          
+          # Run type checking if available
+          if npm run type-check --silent > /dev/null 2>&1 || npm run tsc --silent > /dev/null 2>&1; then
+            echo "📝 Running type checks..."
+            (npm run type-check || npm run tsc) || {
+              echo "⚠️ Type checking issues found (continuing with deployment)"
+              echo "TYPE_ISSUES=true" >> $GITHUB_ENV
+            }
           fi
 
-      - name: Commit changes
+      - name: Build project
+        if: env.HAS_BUILD_SCRIPT == 'true'
         run: |
-          echo "📝 Committing changes..."
-          
-          # Add all changes
-          git add .
-          
-          # Create commit message
-          COMMIT_MSG="feat: ${{ github.event.inputs.request }}
-
-          🤖 Generated with VGit AI
-          
-          Branch: ${{ github.event.inputs.branch_name }}
-          Requested by: ${{ github.event.inputs.username }}
-          
-          Co-Authored-By: VGit AI <ai@vgit.app>"
-          
-          # Commit changes
-          git commit -m "$COMMIT_MSG" || {
-            echo "❌ Commit failed"
+          echo "🏗️ Building project..."
+          npm run build || {
+            echo "❌ Build failed"
             exit 1
           }
-          
-          echo "✅ Changes committed successfully"
+          echo "✅ Build completed successfully"
+          echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
 
-      - name: Push feature branch
+      - name: Detect build output directory
         run: |
-          echo "🚀 Pushing feature branch to origin..."
-          git push origin "${{ github.event.inputs.branch_name }}" || {
-            echo "❌ Push failed"
-            exit 1
-          }
-          echo "✅ Feature branch pushed successfully"
-
-      - name: Create deployment preview (if applicable)
-        run: |
-          echo "🌐 Creating deployment preview..."
+          echo "📁 Detecting build output directory..."
           
-          # Check if this is a web project that can be deployed
-          if [ -f "package.json" ] && (grep -q '"build"' package.json || grep -q '"dev"' package.json); then
-            echo "📦 Web project detected, attempting preview deployment..."
-            
-            # Install Netlify CLI if not present
-            npm install -g netlify-cli
-            
-            # Build the project
-            if grep -q '"build"' package.json; then
-              npm run build && {
-                echo "PREVIEW_BUILD_SUCCESS=true" >> $GITHUB_ENV
-                echo "✅ Build successful"
-              } || {
-                echo "⚠️ Build failed, skipping preview deployment"
-                echo "PREVIEW_BUILD_SUCCESS=false" >> $GITHUB_ENV
-              }
+          # Common build output directories
+          BUILD_DIRS=("dist" "build" "_site" "out" ".next" "public")
+          
+          for dir in "${BUILD_DIRS[@]}"; do
+            if [ -d "$dir" ] && [ "$(ls -A $dir 2>/dev/null)" ]; then
+              echo "BUILD_DIR=$dir" >> $GITHUB_ENV
+              echo "✅ Build output directory found: $dir"
+              break
+            fi
+          done
+          
+          # If no build directory found, use current directory for static sites
+          if [ -z "${BUILD_DIR:-}" ]; then
+            if [ -f "index.html" ]; then
+              echo "BUILD_DIR=." >> $GITHUB_ENV
+              echo "✅ Using current directory for static site"
             else
-              echo "ℹ️ No build script found, skipping preview"
-              echo "PREVIEW_BUILD_SUCCESS=false" >> $GITHUB_ENV
+              echo "❌ No build output directory found"
+              exit 1
             fi
-          else
-            echo "ℹ️ Not a web project, skipping preview deployment"
-            echo "PREVIEW_BUILD_SUCCESS=false" >> $GITHUB_ENV
           fi
+          
+          # List contents of build directory
+          echo "📄 Build directory contents:"
+          ls -la "${BUILD_DIR}"
 
-      - name: Deploy to Netlify (if build succeeded)
-        if: env.PREVIEW_BUILD_SUCCESS == 'true'
+      - name: Deploy to Netlify
+        uses: netlify/actions/cli@master
+        with:
+          args: deploy --dir="${{ env.BUILD_DIR }}" ${{ github.event.inputs.deployment_type == 'production' && '--prod' || format('--alias={0}', github.event.inputs.branch_name) }} --json
         env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+
+      - name: Extract deployment info
         run: |
-          if [ -n "$NETLIFY_AUTH_TOKEN" ] && [ -n "$NETLIFY_SITE_ID" ]; then
-            echo "🚀 Deploying to Netlify..."
-            
-            # Deploy to Netlify with branch alias
-            DEPLOY_OUTPUT=$(netlify deploy --dir=dist --alias="${{ github.event.inputs.branch_name }}" --json) || {
-              echo "⚠️ Netlify deployment failed, continuing..."
-              exit 0
-            }
-            
-            # Extract preview URL
-            PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | jq -r '.deploy_url // empty')
-            if [ -n "$PREVIEW_URL" ]; then
-              echo "✅ Preview deployed: $PREVIEW_URL"
-              echo "PREVIEW_URL=$PREVIEW_URL" >> $GITHUB_ENV
+          echo "✅ Deployment completed successfully"
+          
+          # Use Netlify action outputs
+          if [ -n "$NETLIFY_URL" ]; then
+            echo "DEPLOY_URL=$NETLIFY_URL" >> $GITHUB_ENV
+            echo "🌐 Deployment URL: $NETLIFY_URL"
+          fi
+          
+          if [ -n "$NETLIFY_LOGS_URL" ]; then
+            echo "🔍 Deploy Logs: $NETLIFY_LOGS_URL"
+          fi
+          
+          # Set DEPLOY_ID from output if available
+          if [ -n "$NETLIFY_OUTPUT" ]; then
+            DEPLOY_ID=$(echo "$NETLIFY_OUTPUT" | jq -r '.deploy_id // empty')
+            if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
+              echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
+              echo "🆔 Deploy ID: $DEPLOY_ID"
             fi
-          else
-            echo "ℹ️ Netlify credentials not configured, skipping deployment"
           fi
 
-      - name: Update commit with preview info
-        if: env.PREVIEW_URL != ''
+      - name: Run smoke tests (if applicable)
+        if: env.DEPLOY_URL != ''
         run: |
-          echo "📝 Adding preview info to commit..."
+          echo "🧪 Running smoke tests on deployed site..."
           
-          # Amend commit with preview information
-          UPDATED_COMMIT_MSG="feat: ${{ github.event.inputs.request }}
+          # Wait a moment for deployment to be ready
+          sleep 5
+          
+          # Basic connectivity test
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ env.DEPLOY_URL }}" || echo "000")
+          
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "✅ Site is accessible (HTTP $HTTP_STATUS)"
+            echo "SMOKE_TEST_PASSED=true" >> $GITHUB_ENV
+          else
+            echo "⚠️ Site returned HTTP $HTTP_STATUS"
+            echo "SMOKE_TEST_PASSED=false" >> $GITHUB_ENV
+          fi
+          
+          # Check for basic HTML structure
+          if curl -s "${{ env.DEPLOY_URL }}" | grep -q "<html"; then
+            echo "✅ Valid HTML structure detected"
+          else
+            echo "⚠️ No HTML structure found"
+          fi
 
-          🤖 Generated with VGit AI
-          
-          Branch: ${{ github.event.inputs.branch_name }}
-          Requested by: ${{ github.event.inputs.username }}
-          Preview: ${{ env.PREVIEW_URL }}
-          
-          ---PREVIEW-INFO---
-          preview_url: ${{ env.PREVIEW_URL }}
-          screenshot_url: 
-          
-          Co-Authored-By: VGit AI <ai@vgit.app>"
-          
-          git commit --amend -m "$UPDATED_COMMIT_MSG"
-          git push origin "${{ github.event.inputs.branch_name }}" --force-with-lease
-
-      - name: Create workspace node update payload
+      - name: Generate screenshot (if applicable)
+        if: env.DEPLOY_URL != '' && env.SMOKE_TEST_PASSED == 'true'
         run: |
-          echo "🏗️ Creating workspace node update payload..."
+          echo "📸 Generating screenshot of deployed site..."
           
-          # Get commit SHA
-          COMMIT_SHA=$(git rev-parse HEAD)
+          # Install Playwright for screenshots
+          npm install -g playwright-cli
+          playwright install chromium
           
-          # Create payload for VGit workspace node creation
-          cat > workspace_node_payload.json << EOF
+          # Generate screenshot
+          playwright screenshot "${{ env.DEPLOY_URL }}" screenshot.png || {
+            echo "⚠️ Failed to generate screenshot"
+            exit 0
+          }
+          
+          if [ -f "screenshot.png" ]; then
+            echo "✅ Screenshot generated successfully"
+            echo "SCREENSHOT_GENERATED=true" >> $GITHUB_ENV
+          fi
+
+      - name: Create deployment payload
+        run: |
+          echo "📦 Creating deployment payload..."
+          
+          # Create payload for VGit
+          cat > deployment_payload.json << EOF
           {
-            "repository_full_name": "${{ github.repository }}",
             "branch_name": "${{ github.event.inputs.branch_name }}",
-            "commit_sha": "$COMMIT_SHA",
+            "deployment_type": "${{ github.event.inputs.deployment_type }}",
+            "repository_full_name": "${{ github.repository }}",
             "username": "${{ github.event.inputs.username }}",
             "project_name": "${{ github.event.inputs.project_name }}",
-            "current_node": "${{ github.event.inputs.current_node }}",
-            "preview_url": "${{ env.PREVIEW_URL }}",
+            "project_type": "${{ env.PROJECT_TYPE }}",
+            "framework": "${{ env.FRAMEWORK }}",
+            "build_success": "${{ env.BUILD_SUCCESS == 'true' }}",
+            "deploy_url": "${{ env.DEPLOY_URL }}",
+            "deploy_id": "${{ env.DEPLOY_ID }}",
+            "smoke_test_passed": "${{ env.SMOKE_TEST_PASSED == 'true' }}",
+            "screenshot_generated": "${{ env.SCREENSHOT_GENERATED == 'true' }}",
+            "lint_issues": "${{ env.LINT_ISSUES == 'true' }}",
+            "type_issues": "${{ env.TYPE_ISSUES == 'true' }}",
             "workflow_run_id": "${{ github.run_id }}",
+            "commit_sha": "${{ github.sha }}",
             "created_at": "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
           }
           EOF
           
-          echo "✅ Workspace node payload created"
+          echo "✅ Deployment payload created"
 
-      - name: Upload workspace payload as artifact
+      - name: Upload deployment artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: workspace-node-payload
-          path: workspace_node_payload.json
-          retention-days: 7
+          name: deployment-results
+          path: |
+            deployment_payload.json
+            screenshot.png
+          retention-days: 30
 
       - name: Summary
         run: |
-          echo "🎉 Feature creation completed successfully!"
+          echo "🎉 Deployment completed!"
           echo ""
           echo "📋 Summary:"
           echo "- Branch: ${{ github.event.inputs.branch_name }}"
-          echo "- Feature: ${{ github.event.inputs.request }}"
+          echo "- Type: ${{ github.event.inputs.deployment_type }}"
           echo "- Repository: ${{ github.repository }}"
-          echo "- Commit SHA: $(git rev-parse HEAD)"
-          if [ -n "${{ env.PREVIEW_URL }}" ]; then
-            echo "- Preview URL: ${{ env.PREVIEW_URL }}"
+          echo "- Project Type: ${{ env.PROJECT_TYPE }}"
+          if [ -n "${{ env.FRAMEWORK }}" ]; then
+            echo "- Framework: ${{ env.FRAMEWORK }}"
           fi
+          echo "- Build Success: ${{ env.BUILD_SUCCESS == 'true' }}"
+          if [ -n "${{ env.DEPLOY_URL }}" ]; then
+            echo "- Deployment URL: ${{ env.DEPLOY_URL }}"
+          fi
+          echo "- Smoke Tests: ${{ env.SMOKE_TEST_PASSED == 'true' }}"
+          echo "- Screenshot: ${{ env.SCREENSHOT_GENERATED == 'true' }}"
           echo "- Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          if [ "${{ env.LINT_ISSUES }}" = "true" ]; then
+            echo ""
+            echo "⚠️ Linting issues detected (see build logs)"
+          fi
+          
+          if [ "${{ env.TYPE_ISSUES }}" = "true" ]; then
+            echo ""
+            echo "⚠️ Type checking issues detected (see build logs)"
+          fi
+          
+          echo ""
+          echo "🔗 Access your deployed site: ${{ env.DEPLOY_URL }}"
