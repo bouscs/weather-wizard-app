@@ -220,8 +220,8 @@ jobs:
       - name: Deploy to Netlify (if build succeeded)
         if: env.PREVIEW_BUILD_SUCCESS == 'true'
         env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          NETLIFY_AUTH_TOKEN: nfp_t6J9HdbYeeaNvJtuCLBHgSSWaDWudNNZ62dc
+          NETLIFY_SITE_ID: acbbaac2-ab4b-4c87-a8a5-07549356399d
         run: |
           if [ -n "$NETLIFY_AUTH_TOKEN" ] && [ -n "$NETLIFY_SITE_ID" ]; then
             echo "🚀 Deploying to Netlify..."
