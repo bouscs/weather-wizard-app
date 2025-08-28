@@ -225,6 +225,7 @@ jobs:
         run: |
           if [ -n "$NETLIFY_AUTH_TOKEN" ] && [ -n "$NETLIFY_SITE_ID" ]; then
             echo "🚀 Deploying to Netlify..."
+            echo "NETLIFY_SITE_ID=$NETLIFY_SITE_ID"
             
             # Deploy to Netlify with branch alias
             DEPLOY_OUTPUT=$(netlify deploy --dir=dist --alias="${{ github.event.inputs.branch_name }}" --json) || {
