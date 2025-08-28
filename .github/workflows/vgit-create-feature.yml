@@ -259,7 +259,10 @@ jobs:
           
           # Create screenshot script
           cat > screenshot.js << 'EOF'
-          const { chromium } = require('playwright');
+          import { chromium } from 'playwright';
+          import FormData from 'form-data';
+          import fetch from 'node-fetch';
+          import fs from 'fs';
           
           (async () => {
             console.log('🚀 Launching browser...');
@@ -296,8 +299,6 @@ jobs:
             
             // Upload to Uploadcare
             console.log('☁️ Uploading to Uploadcare CDN...');
-            const FormData = require('form-data');
-            const fetch = require('node-fetch');
             
             const form = new FormData();
             form.append('UPLOADCARE_PUB_KEY', process.env.UPLOADCARE_PUBLIC_KEY);
@@ -318,7 +319,6 @@ jobs:
               console.log(`SCREENSHOT_URL=${cdnUrl}`);
               
               // Set environment variable for next steps
-              const fs = require('fs');
               fs.appendFileSync(process.env.GITHUB_ENV, `SCREENSHOT_URL=${cdnUrl}\n`);
             } else {
               console.error('❌ Upload failed:', result);
@@ -353,10 +353,9 @@ jobs:
           Preview: ${{ env.PREVIEW_URL }}
           
           ---PREVIEW-INFO---
-          preview_url: ${{ env.PREVIEW_URL }}
-          screenshot_url: ${{ env.SCREENSHOT_URL }}
-          
-          Co-Authored-By: VGit AI <ai@vgit.app>"
+          Preview URL: ${{ env.PREVIEW_URL }}
+          Screenshot URL: ${{ env.SCREENSHOT_URL }}
+          "
           
           git commit --amend -m "$UPDATED_COMMIT_MSG"
           git push origin "${{ github.event.inputs.branch_name }}" --force-with-lease
